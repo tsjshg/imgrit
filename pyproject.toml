@@ -5,9 +5,21 @@ build-backend = "hatchling.build"
 [project]
 name = "imgrit"
 description = "A tiny image processing library with k-means and Voronoi diagram."
-version="0.1.0"
+version="0.1.1"
+authors = [
+  { name="Shingo TSUJI", email="shingo.tsuji@gmail.com" },
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+readme = "README.md"
 dependencies = [
   "Pillow>=11.2.1",
   "numpy>=2.3.1",
   "scipy>=1.15.3"]
 requires-python = ">= 3.9"
+
+[project.urls]
+Homepage = "https://github.com/tsjshg/imgrit"
+Issues = "https://github.com/tsjshg/imgrit/issues"
