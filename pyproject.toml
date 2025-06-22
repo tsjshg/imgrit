@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "imgrit"
 description = "A tiny image processing library with k-means and Voronoi diagram."
-version="0.1.1"
+version="0.1.2"
 authors = [
   { name="Shingo TSUJI", email="shingo.tsuji@gmail.com" },
 ]

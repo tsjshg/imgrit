@@ -332,12 +332,28 @@ class KMeansImage:
         return Image.fromarray(res_img_array)
 
 
-def voronoi_mosaic(img, num_regions=20, line_width=2, mode="L"):
+def voronoi_mosaic(img, num_regions=20, line_width=1, mode="L"):
+    """create Voronoi mosaic art from your input image.
+
+    img: str (file path) or PIL.Image instance
+    num_regions: int (default=20)
+        number of retions. larger value may take few minutes to convet the images.
+    line_width: int (default=2)
+        line width for Voronoi boundaries
+    mode: 'L' or 'color'
+        default is 'L'
+    """
     img = KMeansImage(img)
     voronoi_img = img.voronoi_img(num_regions, line_width=line_width, mode=mode)
     return voronoi_img
 
 
 def warhol_effect(img, n_clusters=5):
+    """create Warhol effect art from your input image.
+
+    img: str (file path) or PIL.Image instance
+    n_clusters: int (default=5)
+        number of colors to use
+    """
     img = KMeansImage(img)
     return img.clustered_img(n_clusters)
