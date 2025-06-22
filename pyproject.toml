@@ -1,0 +1,13 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "imgrit"
+description = "A tiny image processing library with k-means and Voronoi diagram."
+version="0.1.0"
+dependencies = [
+  "Pillow>=11.2.1",
+  "numpy>=2.3.1",
+  "scipy>=1.15.3"]
+requires-python = ">= 3.9"

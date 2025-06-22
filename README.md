@@ -1,2 +1,2 @@
 # imgrit
-a tiny image processing functions with k-means and Voronoi diagram.
+A tiny image processing library with k-means and Voronoi diagram.
