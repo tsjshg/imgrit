@@ -8,6 +8,8 @@ This is a tiny image processing library to conver your images to Voronoi mosaic 
 
 The library depends on [Pillow](https://pypi.org/project/pillow/), [NumPy](https://pypi.org/project/numpy/), and [SciPy](https://pypi.org/project/scipy/).
 
+If you have [scikit-learn](https://scikit-learn.org/stable/), the library uses the faster k-means.
+
 The following is the input image.
 
 <img width="50%" src="https://github.com/tsjshg/imgrit/blob/main/images/original.jpg?raw=true">

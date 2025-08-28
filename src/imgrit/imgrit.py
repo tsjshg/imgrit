@@ -8,7 +8,15 @@ from scipy.spatial import KDTree, Voronoi
 
 # kmeans is clearly a bottle neck of this library
 # todo: replace faster implementation such as by Rust
-from scipy.cluster.vq import kmeans2
+try:
+    from sklearn.cluster import KMeans
+
+    # I have scikit-learn
+    HAVE_SKL = True
+except ImportError:
+    from scipy.cluster.vq import kmeans2
+
+    HAVE_SKL = False
 
 ZERO_TOL = 1.0e-12
 
@@ -172,7 +180,13 @@ class VoronoiImage:
     def _convert_boundaries(self, boundaries, width_dict):
         """todo: understand and test this 色の差を線の太さに変換する関数"""
         data = np.array([v[1] for v in boundaries]).reshape(-1, 1)
-        centroid, pred = kmeans2(data, len(width_dict), minit="++")
+        k = len(width_dict)
+        if HAVE_SKL:
+            kmeans = KMeans(n_clusters=k).fit(data)
+            pred = kmeans.labels_
+            centroid = kmeans.cluster_centers_
+        else:
+            centroid, pred = kmeans2(data, k, minit="++")
         # クラスターの中心の並びを調べる
         class_to_width = {v: i for i, v in enumerate(np.argsort(centroid.flatten()))}
         for i in range(len(boundaries)):
@@ -303,7 +317,11 @@ class KMeansImage:
             temp = self.img_minmax[:, [0, 1, 2, 3, 4]]
         else:  # black and white
             temp = self.img_minmax[:, [0, 1, 5]]
-        centroid, cluster = kmeans2(temp, num_sites, minit="++")
+        if HAVE_SKL:
+            kmeans = KMeans(n_clusters=num_sites).fit(temp)
+            centroid = kmeans.cluster_centers_
+        else:
+            centroid, _ = kmeans2(temp, num_sites, minit="++")
         # depends on the order of self.img_df column names
         sites = [
             tuple(v) for v in (centroid[:, [0, 1]] * [self.h, self.w]).astype(np.int32)
@@ -317,7 +335,12 @@ class KMeansImage:
     def clustered_img(self, num_sites):
         # X, Y, R, G, B
         input_data = self.img_minmax[:, [0, 1, 2, 3, 4]]
-        centroid, labels = kmeans2(input_data, num_sites, minit="++")
+        if HAVE_SKL:
+            kmeans = KMeans(n_clusters=num_sites).fit(input_data)
+            labels = kmeans.labels_
+            centroid = kmeans.cluster_centers_
+        else:
+            centroid, labels = kmeans2(input_data, num_sites, minit="++")
         cluster_centers = [
             v for v in (centroid[:, 2:] * [255, 255, 255]).astype(np.int32)
         ]
