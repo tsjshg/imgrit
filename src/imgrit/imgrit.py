@@ -126,7 +126,7 @@ class VoronoiImage:
     def __init__(self, img, sites):
         """
         img: PIL image file
-        sites: int or array-like. specify the number of Voronoi sites or concrete one
+        sites: int or array-like. specify the number of Voronoi sites or concrete positions
         """
         self.img = img
         # to NumPy array
@@ -200,11 +200,10 @@ class VoronoiImage:
         boundary: boolean
             with boundary lines or not
         with_sites: boolean
-            if true put 'x' on control point
+            if true, put 'x' on control points
         line_width: int or dict
             if dict is given like {0:1, 1:5, 2:10} line width are changed based on the color differences between neighbor Voronoit regions
-
-        Returns: PIL image
+        Returns: None
         """
         kd_tree = KDTree(self.sites)
         # make Resions from self.sites
@@ -221,24 +220,23 @@ class VoronoiImage:
                 continue
             pixel = Pixel(p[0], p[1], res[0][i])
             # res[1][i] is the index of sites
+            # this pixel belong to this region.
             self.regions[res[1][i]].append(pixel)
         voronoi_art = self.img_array.copy()
-        # initialize the error
-        # error = np.zeros(3, np.float64)
         # don't change the color of the site point
         for region in self.regions:
             for p in region.followers:
                 voronoi_art[p.x, p.y] = self.img_array[region.site[0], region.site[1]]
-                # error += np.abs(
-                #     np.array(voronoi_art[p.x, p.y], dtype=np.int32)
-                #     - np.array(self.img_array[p.x, p.y], dtype=np.int32)
-                # )
-        # self.error = np.sum(error) / (self.axis0 * self.axis1)
+        error = np.abs(
+            np.array(voronoi_art, dtype=np.int32)
+            - np.array(self.img_array, dtype=np.int32)
+        )
+        self.error = np.sum(error) / (self.axis0 * self.axis1)
         # if don't need the boundaries this is the goal.
         img = Image.fromarray(voronoi_art)
         if not boundary:
             self.voronoi_img = img
-            return img
+            return None
         # make Voronoi diagram with SciPy function
         vor = Voronoi(self.sites)
         draw = ImageDraw.Draw(img)
@@ -275,7 +273,6 @@ class VoronoiImage:
             for vv in vor.points:
                 draw.text((vv[1], vv[0]), "x")
         self.voronoi_img = img
-        return img
 
 
 class KMeansImage:
@@ -311,26 +308,39 @@ class KMeansImage:
         line_width=1,
         boundary=True,
         mode="color",
+        random=False,
     ):
         if mode == "color":
             # X, Y, R, G, B
             temp = self.img_minmax[:, [0, 1, 2, 3, 4]]
         else:  # black and white
             temp = self.img_minmax[:, [0, 1, 5]]
-        if HAVE_SKL:
-            kmeans = KMeans(n_clusters=num_sites).fit(temp)
-            centroid = kmeans.cluster_centers_
+        if not random:
+            if HAVE_SKL:
+                kmeans = KMeans(n_clusters=num_sites).fit(temp)
+                centroid = kmeans.cluster_centers_
+            else:
+                centroid, _ = kmeans2(temp, num_sites, minit="++")
         else:
-            centroid, _ = kmeans2(temp, num_sites, minit="++")
+            # exclude near boundary pixels to avoid later errors
+            margin = 0.03
+            temp = self.img_minmax[
+                (self.img_minmax[:, 0] <= (1 - margin))
+                & (self.img_minmax[:, 0] >= margin)
+                & (self.img_minmax[:, 1] <= (1 - margin))
+                & (self.img_minmax[:, 1] >= margin)
+            ]
+            idx = sample(range(temp.shape[0]), num_sites)
+            centroid = temp[idx, :]
         # depends on the order of self.img_df column names
         sites = [
             tuple(v) for v in (centroid[:, [0, 1]] * [self.h, self.w]).astype(np.int32)
         ]
         self.voronoi_img_instance = VoronoiImage(self.img, sites)
-        voronoi_img = self.voronoi_img_instance.create_Voronoi_image(
+        self.voronoi_img_instance.create_Voronoi_image(
             with_sites=with_sites, line_width=line_width, boundary=boundary
         )
-        return voronoi_img
+        return self.voronoi_img_instance.voronoi_img, self.voronoi_img_instance.error
 
     def clustered_img(self, num_sites):
         # X, Y, R, G, B
@@ -341,9 +351,11 @@ class KMeansImage:
             centroid = kmeans.cluster_centers_
         else:
             centroid, labels = kmeans2(input_data, num_sites, minit="++")
+        # assign color to each cluster center
         cluster_centers = [
             v for v in (centroid[:, 2:] * [255, 255, 255]).astype(np.int32)
         ]
+        # make image data based on pixel's cluster label
         temp = []
         for c in range(3):
             temp.append(
@@ -355,7 +367,9 @@ class KMeansImage:
         return Image.fromarray(res_img_array)
 
 
-def voronoi_mosaic(img, num_regions=20, line_width=1, mode="L"):
+def voronoi_mosaic(
+    img, num_regions=20, line_width=1, mode="L", random=False, verbose=False
+):
     """create Voronoi mosaic art from your input image.
 
     img: str (file path) or PIL.Image instance
@@ -364,10 +378,18 @@ def voronoi_mosaic(img, num_regions=20, line_width=1, mode="L"):
     line_width: int (default=2)
         line width for Voronoi boundaries
     mode: 'L' or 'color'
-        default is 'L'
+        default is 'L' means gray scale
+    random: boolean
+        if true, return not using k-menas to make voronoi sites but randomly selected sites (default False)
+    verbose: boolean
+        if true, return error values difference between original image and voronoi image (for research purpose, default False)
     """
     img = KMeansImage(img)
-    voronoi_img = img.voronoi_img(num_regions, line_width=line_width, mode=mode)
+    voronoi_img, error = img.voronoi_img(
+        num_regions, line_width=line_width, mode=mode, random=random
+    )
+    if verbose:
+        return voronoi_img, error
     return voronoi_img
 
 
