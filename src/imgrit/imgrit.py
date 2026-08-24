@@ -1,3 +1,4 @@
+import logging
 from dataclasses import dataclass
 from random import sample
 from math import isclose
@@ -19,6 +20,8 @@ except ImportError:
     HAVE_SKL = False
 
 ZERO_TOL = 1.0e-12
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -71,7 +74,7 @@ def find_edge_point(ridge_point_pair, regions, vor, x_max=600, y_max=400):
     if isclose(v1[0], 0.0, abs_tol=ZERO_TOL):  # parallel along with x-axis
         temp = [(0, vv[1]), (x_max, vv[1])]
     elif isclose(v1[1], 0.0, abs_tol=ZERO_TOL):  # parallel along with ｙ-axis
-        temp = [(vv[0], 0), (vv[1], y_max)]
+        temp = [(vv[0], 0), (vv[0], y_max)]
     else:  # pass the zero div check
         for v, on in [(0, "x"), (0, "y"), (x_max, "y"), (y_max, "x")]:
             ret_val = solve(v1, vv, v, on)
@@ -128,13 +131,13 @@ class VoronoiImage:
         img: PIL image file
         sites: int or array-like. specify the number of Voronoi sites or concrete positions
         """
+        # normalize to RGB: drops the alpha channel and expands
+        # grayscale / palette images to 3 channels
+        if img.mode != "RGB":
+            img = img.convert("RGB")
         self.img = img
         # to NumPy array
         self.img_array = np.array(self.img)
-        # todo: take care of alpha value
-        # now ignore them
-        if self.img_array.shape[2] == 4:
-            self.img_array = self.img_array[:, :, :3]
         # axis0: height of the image
         # axis1: width of the image
         self.axis0, self.axis1, self.color_channels = self.img_array.shape
@@ -146,7 +149,7 @@ class VoronoiImage:
             # sites are given by number
             self.sites_num = sites
             self.sites = self.init_sites()
-        elif isinstance(sites, (list, tuple, np.array)):
+        elif isinstance(sites, (list, tuple, np.ndarray)):
             # sites are given by specific values
             self.sites_num = len(sites)
             # to tuple
@@ -266,9 +269,8 @@ class VoronoiImage:
         for idx, width in boundaries:
             try:
                 draw.line(idx, fill=(0, 0, 0), width=width)
-            except:
-                # What's happened?
-                print(idx)
+            except (TypeError, ValueError):
+                logger.warning("failed to draw a boundary line: %r", idx)
         if with_sites:
             for vv in vor.points:
                 draw.text((vv[1], vv[0]), "x")
@@ -281,6 +283,10 @@ class KMeansImage:
             self.img = Image.open(img_file)
         else:
             self.img = img_file
+        # normalize to RGB: drops the alpha channel and expands
+        # grayscale / palette images to 3 channels
+        if self.img.mode != "RGB":
+            self.img = self.img.convert("RGB")
         self.img_array = np.array(self.img)
         self.h, self.w, self.channel = self.img_array.shape
         # X, Y
@@ -296,9 +302,12 @@ class KMeansImage:
             ],
             axis=1,
         )
-        self.img_minmax = data / data.max(
-            axis=0
-        )  # all values are positive so this make the input minmax-scaled data
+        # all values are positive so dividing by the max gives values in [0, 1]
+        # keep the scale to map centroids back to pixel coordinates / colors
+        self.scale = data.max(axis=0)
+        # avoid zero division for constant columns (e.g. an all-black channel)
+        self.scale[self.scale == 0] = 1
+        self.img_minmax = data / self.scale
         self.voronoi_img_instance = None
 
     def voronoi_img(
@@ -313,8 +322,10 @@ class KMeansImage:
         if mode == "color":
             # X, Y, R, G, B
             temp = self.img_minmax[:, [0, 1, 2, 3, 4]]
-        else:  # black and white
+        elif mode == "L":  # black and white
             temp = self.img_minmax[:, [0, 1, 5]]
+        else:
+            raise ValueError("mode must be 'L' or 'color'.")
         if not random:
             if HAVE_SKL:
                 kmeans = KMeans(n_clusters=num_sites).fit(temp)
@@ -322,20 +333,19 @@ class KMeansImage:
             else:
                 centroid, _ = kmeans2(temp, num_sites, minit="++")
         else:
-            # exclude near boundary pixels to avoid later errors
-            margin = 0.03
-            temp = self.img_minmax[
-                (self.img_minmax[:, 0] <= (1 - margin))
-                & (self.img_minmax[:, 0] >= margin)
-                & (self.img_minmax[:, 1] <= (1 - margin))
-                & (self.img_minmax[:, 1] >= margin)
-            ]
             idx = sample(range(temp.shape[0]), num_sites)
             centroid = temp[idx, :]
-        # depends on the order of self.img_df column names
+        # scale the first two columns back to pixel coordinates with the
+        # same factors used in __init__ (h - 1 and w - 1), so the results
+        # always stay within the image frame
         sites = [
-            tuple(v) for v in (centroid[:, [0, 1]] * [self.h, self.w]).astype(np.int32)
+            tuple(v)
+            for v in (centroid[:, [0, 1]] * self.scale[[0, 1]])
+            .round()
+            .astype(np.int32)
         ]
+        # rounding can produce duplicated sites; drop them keeping the order
+        sites = list(dict.fromkeys(sites))
         self.voronoi_img_instance = VoronoiImage(self.img, sites)
         self.voronoi_img_instance.create_Voronoi_image(
             with_sites=with_sites, line_width=line_width, boundary=boundary
@@ -351,9 +361,10 @@ class KMeansImage:
             centroid = kmeans.cluster_centers_
         else:
             centroid, labels = kmeans2(input_data, num_sites, minit="++")
-        # assign color to each cluster center
+        # assign color to each cluster center, scaling the RGB columns back
+        # with the same factors used in __init__
         cluster_centers = [
-            v for v in (centroid[:, 2:] * [255, 255, 255]).astype(np.int32)
+            v for v in (centroid[:, 2:] * self.scale[2:5]).round().astype(np.int32)
         ]
         # make image data based on pixel's cluster label
         temp = []
@@ -374,13 +385,15 @@ def voronoi_mosaic(
 
     img: str (file path) or PIL.Image instance
     num_regions: int (default=20)
-        number of retions. larger value may take few minutes to convet the images.
-    line_width: int (default=2)
+        number of regions. larger value may take few minutes to convert the images.
+    line_width: int (default=1)
         line width for Voronoi boundaries
     mode: 'L' or 'color'
-        default is 'L' means gray scale
+        features used by k-means to place the Voronoi sites. 'L' (default)
+        uses the gray scale intensity, 'color' uses the RGB values.
+        the output image is colored in both cases.
     random: boolean
-        if true, return not using k-menas to make voronoi sites but randomly selected sites (default False)
+        if true, return not using k-means to make voronoi sites but randomly selected sites (default False)
     verbose: boolean
         if true, return error values difference between original image and voronoi image (for research purpose, default False)
     """

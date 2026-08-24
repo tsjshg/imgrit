@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.26"]
 build-backend = "hatchling.build"
 
 [project]
@@ -9,6 +9,8 @@ version="0.2.0"
 authors = [
   { name="Shingo TSUJI", email="shingo.tsuji@gmail.com" },
 ]
+license = "BSD-3-Clause"
+license-files = ["LICENSE"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
@@ -18,7 +20,11 @@ dependencies = [
   "Pillow>=11.2.1",
   "numpy>=2.3.1",
   "scipy>=1.15.3"]
-requires-python = ">= 3.9"
+# numpy>=2.3 requires Python 3.11+
+requires-python = ">= 3.11"
+
+[project.optional-dependencies]
+sklearn = ["scikit-learn"]
 
 [project.urls]
 Homepage = "https://github.com/tsjshg/imgrit"

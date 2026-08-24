@@ -1,6 +1,6 @@
 # README
 
-This is a tiny image processing library to conver your images to Voronoi mosaic or Warhol effect images. We used k-means clustering algorithms to determine the position of Voronoi sites and pixel groups of Warhol effect.
+This is a tiny image processing library to convert your images to Voronoi mosaic or Warhol effect images. We used k-means clustering algorithms to determine the position of Voronoi sites and pixel groups of Warhol effect.
 
 # How to use
 
@@ -8,7 +8,7 @@ This is a tiny image processing library to conver your images to Voronoi mosaic 
 
 The library depends on [Pillow](https://pypi.org/project/pillow/), [NumPy](https://pypi.org/project/numpy/), and [SciPy](https://pypi.org/project/scipy/).
 
-If you have [scikit-learn](https://scikit-learn.org/stable/), the library uses the faster k-means.
+If you have [scikit-learn](https://scikit-learn.org/stable/), the library uses the faster k-means. You can install it together with `pip install "imgrit[sklearn]"`.
 
 The following is the input image.
 
@@ -39,4 +39,4 @@ If you'd like to see more images, please visit [Asakura Gallery Digital](https:/
 
 ## Citations
 
-under preparetion.
+under preparation.
