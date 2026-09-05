@@ -39,4 +39,4 @@ If you'd like to see more images, please visit [Asakura Gallery Digital](https:/
 
 ## Citations
 
-under preparation.
+[A novel method for Voronoi mosaic effect using k-means clustering](https://jxiv.jst.go.jp/index.php/jxiv/preprint/view/5152/) 
