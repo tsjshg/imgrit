@@ -7,8 +7,8 @@ from PIL import Image, ImageDraw
 import numpy as np
 from scipy.spatial import KDTree, Voronoi
 
-# kmeans is clearly a bottle neck of this library
-# todo: replace faster implementation such as by Rust
+# kmeans is the bottleneck of this library.
+# For Voronoi sites it is fitted on subsampled pixels (see subsample_for_kmeans).
 try:
     from sklearn.cluster import KMeans
 
@@ -21,7 +21,32 @@ except ImportError:
 
 ZERO_TOL = 1.0e-12
 
+# k-means for Voronoi sites is fitted on randomly subsampled pixels.
+# The fitting quality depends on the number of samples per cluster, not on
+# the image size, so the sample size grows with the number of sites:
+#   min(number of pixels, max(MIN_KMEANS_SAMPLES, KMEANS_SAMPLES_PER_SITE * sites))
+# 200 samples per site keeps the k-means objective within about 2-3% of the
+# full-pixel fit.
+MIN_KMEANS_SAMPLES = 10_000
+KMEANS_SAMPLES_PER_SITE = 200
+
 logger = logging.getLogger(__name__)
+
+
+def kmeans_sample_size(num_pixels, num_sites):
+    """number of pixels used to fit k-means for the given number of sites"""
+    return min(
+        num_pixels, max(MIN_KMEANS_SAMPLES, KMEANS_SAMPLES_PER_SITE * num_sites)
+    )
+
+
+def subsample_for_kmeans(data, num_sites):
+    """randomly pick rows of data (pixels) to fit k-means faster"""
+    n = kmeans_sample_size(len(data), num_sites)
+    if n >= len(data):
+        return data
+    idx = np.random.default_rng().choice(len(data), n, replace=False)
+    return data[idx]
 
 
 @dataclass
@@ -327,6 +352,8 @@ class KMeansImage:
         else:
             raise ValueError("mode must be 'L' or 'color'.")
         if not random:
+            # only the centroids are needed, so fitting on a subsample is enough
+            temp = subsample_for_kmeans(temp, num_sites)
             if HAVE_SKL:
                 kmeans = KMeans(n_clusters=num_sites).fit(temp)
                 centroid = kmeans.cluster_centers_
