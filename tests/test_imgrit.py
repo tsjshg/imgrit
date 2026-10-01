@@ -100,3 +100,29 @@ def test_duplicated_centroids_are_dropped(small_img):
     tiny = KMeansImage(small_img.resize((4, 4)))
     out, _ = tiny.voronoi_img(10, boundary=True)
     assert out.size == (4, 4)
+
+
+def test_kmeans_sample_size():
+    """Sample size grows with the number of sites, not with the image size,
+    and never exceeds the number of pixels."""
+    from imgrit.imgrit import kmeans_sample_size
+
+    assert kmeans_sample_size(10_000_000, 20) == 10_000  # lower bound
+    assert kmeans_sample_size(10_000_000, 250) == 50_000  # 200 per site
+    assert kmeans_sample_size(10_000_000, 1000) == 200_000
+    assert kmeans_sample_size(1_000_000, 250) == kmeans_sample_size(10_000_000, 250)
+    assert kmeans_sample_size(2_400, 250) == 2_400  # capped by pixels
+
+
+def test_subsample_for_kmeans():
+    from imgrit.imgrit import subsample_for_kmeans
+
+    data = np.arange(300_000 * 3, dtype=float).reshape(-1, 3)
+    sub = subsample_for_kmeans(data, 250)
+    assert sub.shape == (50_000, 3)
+    # rows are picked without replacement from the original data
+    assert len(np.unique(sub[:, 0])) == 50_000
+    assert np.isin(sub[:, 0], data[:, 0]).all()
+    # small data is returned as is
+    small = data[:5_000]
+    assert subsample_for_kmeans(small, 250) is small
