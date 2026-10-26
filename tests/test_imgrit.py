@@ -126,3 +126,90 @@ def test_subsample_for_kmeans():
     # small data is returned as is
     small = data[:5_000]
     assert subsample_for_kmeans(small, 250) is small
+
+
+def _brute_force_boundary_distance(shape, sites):
+    h, w = shape
+    sites = np.asarray(sites, float)
+    yy, xx = np.mgrid[0:h, 0:w]
+    p = np.stack([yy, xx], axis=-1).astype(float)[..., None, :]  # (h, w, 1, 2)
+    d2 = ((p - sites) ** 2).sum(-1)  # (h, w, n)
+    nearest = d2.argmin(-1)
+    s1 = sites[nearest]
+    with np.errstate(invalid="ignore"):  # 0 / 0 for the nearest site itself
+        dist = (d2 - np.take_along_axis(d2, nearest[..., None], -1)) / (
+            2 * np.linalg.norm(sites[None, None] - s1[..., None, :], axis=-1)
+        )
+    dist[np.arange(h)[:, None], np.arange(w)[None, :], nearest] = np.inf
+    return nearest, dist.min(-1)
+
+
+@pytest.mark.parametrize("seed", range(10))
+def test_boundary_distance_matches_brute_force(seed):
+    """exact distance for few sites (all candidates) and many sites (Delaunay)"""
+    from imgrit.imgrit import boundary_distance
+
+    rng = np.random.default_rng(seed)
+    n = [3, 10, 40, 80][seed % 4]
+    sites = list(dict.fromkeys(map(tuple, rng.integers(0, [40, 60], size=(n, 2)))))
+    label, dist = boundary_distance((40, 60), sites)
+    label_bf, dist_bf = _brute_force_boundary_distance((40, 60), sites)
+    assert np.allclose(dist, dist_bf)
+    # pixels equidistant from two sites may get either label, but they are
+    # exactly on the boundary
+    tie = label != label_bf
+    assert np.allclose(dist[tie], 0)
+
+
+def test_boundary_distance_collinear_sites():
+    """Delaunay fails for collinear sites; fall back to all candidates"""
+    from imgrit.imgrit import boundary_distance
+
+    sites = [(20, x) for x in range(2, 60, 3)]
+    _, dist = boundary_distance((40, 60), sites)
+    _, dist_bf = _brute_force_boundary_distance((40, 60), sites)
+    assert np.allclose(dist, dist_bf)
+
+
+def test_boundary_distance_single_site():
+    from imgrit.imgrit import boundary_distance
+
+    label, dist = boundary_distance((10, 10), [(5, 5)])
+    assert (label == 0).all() and np.isinf(dist).all()
+
+
+@pytest.mark.parametrize("mode", ["RGB", "L", "RGBA"])
+def test_voronoi_relief_output(small_img, mode):
+    out = imgrit.voronoi_relief(small_img.convert(mode), 10)
+    assert out.size == small_img.size and out.mode == "RGB"
+
+
+def test_voronoi_relief_single_region(small_img):
+    out = imgrit.voronoi_relief(small_img, 1)
+    assert out.size == small_img.size
+
+
+def test_relief_image_without_effects_keeps_site_colors(small_img):
+    """With no relief, groove, gloss or line, every site keeps its color."""
+    from imgrit.imgrit import relief_image
+
+    arr = np.array(small_img)
+    sites = [(5, 5), (20, 30), (30, 10), (10, 50)]
+    out = np.array(
+        relief_image(arr, sites, line_width=0, height=0, groove=0, gloss=0)
+    )
+    for r, c in sites:
+        assert (out[r, c] == arr[r, c]).all()
+
+
+def test_relief_image_line_color(small_img):
+    """A flat relief draws boundary lines exactly in line_color (an int is a gray)."""
+    from imgrit.imgrit import relief_image
+
+    arr = np.array(small_img)
+    out = np.array(
+        relief_image(arr, [(20, 15), (20, 45)], line_width=0.3, line_color=90,
+                     height=0, groove=0, gloss=0)
+    )
+    # the boundary between the two sites is the column x = 30
+    assert (out[:, 30] == 90).all()

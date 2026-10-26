@@ -5,7 +5,8 @@ from math import isclose
 
 from PIL import Image, ImageDraw
 import numpy as np
-from scipy.spatial import KDTree, Voronoi
+from scipy import ndimage
+from scipy.spatial import Delaunay, KDTree, QhullError, Voronoi
 
 # kmeans is the bottleneck of this library.
 # For Voronoi sites it is fitted on subsampled pixels (see subsample_for_kmeans).
@@ -344,6 +345,15 @@ class KMeansImage:
         mode="color",
         random=False,
     ):
+        sites = self.find_sites(num_sites, mode=mode, random=random)
+        self.voronoi_img_instance = VoronoiImage(self.img, sites)
+        self.voronoi_img_instance.create_Voronoi_image(
+            with_sites=with_sites, line_width=line_width, boundary=boundary
+        )
+        return self.voronoi_img_instance.voronoi_img, self.voronoi_img_instance.error
+
+    def find_sites(self, num_sites, mode="color", random=False):
+        """Voronoi sites as a list of (row, col) placed by k-means or randomly"""
         if mode == "color":
             # X, Y, R, G, B
             temp = self.img_minmax[:, [0, 1, 2, 3, 4]]
@@ -372,12 +382,7 @@ class KMeansImage:
             .astype(np.int32)
         ]
         # rounding can produce duplicated sites; drop them keeping the order
-        sites = list(dict.fromkeys(sites))
-        self.voronoi_img_instance = VoronoiImage(self.img, sites)
-        self.voronoi_img_instance.create_Voronoi_image(
-            with_sites=with_sites, line_width=line_width, boundary=boundary
-        )
-        return self.voronoi_img_instance.voronoi_img, self.voronoi_img_instance.error
+        return list(dict.fromkeys(sites))
 
     def clustered_img(self, num_sites):
         # X, Y, R, G, B
@@ -403,6 +408,184 @@ class KMeansImage:
             )
         res_img_array = np.dstack(temp)
         return Image.fromarray(res_img_array)
+
+
+def _smoothstep(edge0, edge1, x):
+    t = np.clip((x - edge0) / (edge1 - edge0), 0, 1)
+    return t * t * (3 - 2 * t)
+
+
+def _blur(a, sigma):
+    """Gaussian-like blur whose cost does not grow with sigma"""
+    if sigma < 2:
+        return ndimage.gaussian_filter(a, sigma)
+    # three passes of a box filter approximate a Gaussian:
+    # the variance of a box of width n is (n**2 - 1) / 12
+    size = max(3, int(round(2 * sigma)) | 1)
+    for _ in range(3):
+        a = ndimage.uniform_filter(a, size)
+    return a
+
+
+def _voronoi_neighbors(sites):
+    """indices of the neighboring sites of each site as an (n, max degree)
+    array padded with -1. Extra (non-neighboring) sites are harmless."""
+    n = len(sites)
+    if n > 16:
+        try:
+            # Delaunay neighbors are exactly the Voronoi neighbors
+            indptr, indices = Delaunay(sites).vertex_neighbor_vertices
+            degree = np.diff(indptr)
+            neighbors = np.full((n, degree.max()), -1, dtype=np.intp)
+            for i in range(n):
+                neighbors[i, : degree[i]] = indices[indptr[i] : indptr[i + 1]]
+            return neighbors
+        except QhullError:  # e.g. all sites on a line
+            pass
+    # few or degenerate sites: every other site is a candidate
+    return np.array([[j for j in range(n) if j != i] for i in range(n)], np.intp)
+
+
+def boundary_distance(shape, sites):
+    """label of the nearest site and the distance to the Voronoi boundary
+    for every pixel.
+
+    The boundary between the sites s1 and sj is their perpendicular bisector,
+    and the distance from a pixel p in the region of s1 to it is
+    (|p - sj|**2 - |p - s1|**2) / (2 |sj - s1|). A Voronoi region is convex
+    and its edges lie on the bisectors with the neighboring sites, so the
+    distance to the boundary is the minimum over the neighbors.
+    """
+    h, w = shape
+    sites = np.asarray(sites, dtype=np.float64)
+    if len(sites) < 2:
+        return np.zeros((h, w), np.intp), np.full((h, w), np.inf)
+    yy, xx = np.mgrid[0:h, 0:w]
+    pixels = np.column_stack([yy.ravel(), xx.ravel()]).astype(np.float64)
+    d0, nearest = KDTree(sites).query(pixels)
+    s1 = sites[nearest]
+    neighbors = _voronoi_neighbors(sites)
+    dist = np.full(len(pixels), np.inf)
+    for j in range(neighbors.shape[1]):
+        nb = neighbors[nearest, j]
+        ok = nb >= 0
+        sj = sites[nb[ok]]
+        to_bisector = (((pixels[ok] - sj) ** 2).sum(axis=1) - d0[ok] ** 2) / (
+            2 * np.linalg.norm(sj - s1[ok], axis=1)
+        )
+        dist[ok] = np.minimum(dist[ok], to_bisector)
+    return nearest.reshape(h, w), dist.reshape(h, w)
+
+
+def _shade(z, light=(-1.0, -1.0, 1.3), ambient=0.35, shininess=18):
+    """diffuse shading (1.0 on a flat surface) and specular highlight of a
+    height map lit from the given direction (x right, y down, z to viewer)"""
+    gy, gx = np.gradient(z)
+    normal = np.dstack([-gx, -gy, np.ones_like(z)])
+    normal /= np.linalg.norm(normal, axis=2, keepdims=True)
+    light = np.asarray(light, dtype=np.float64)
+    light /= np.linalg.norm(light)
+    half = light + np.array([0.0, 0.0, 1.0])
+    half /= np.linalg.norm(half)
+    diffuse = np.clip(normal @ light, 0, 1)
+    specular = np.clip(normal @ half, 0, 1) ** shininess
+    flat = ambient + (1 - ambient) * light[2]
+    return (ambient + (1 - ambient) * diffuse) / flat, specular
+
+
+def relief_image(
+    img_array,
+    sites,
+    line_width=0.11,
+    line_color=(115, 115, 115),
+    height=0.04,
+    groove=0.04,
+    gloss=0.12,
+):
+    """render Voronoi regions as smooth, slightly raised paint separated by
+    recessed lines. Sizes are relative to the typical region size
+    sqrt(number of pixels / number of regions).
+
+    img_array: RGB image as a NumPy array (height, width, 3)
+    sites: list of (row, col)
+    """
+    h, w = img_array.shape[:2]
+    sites = np.asarray(sites, dtype=np.intp)
+    label, dist = boundary_distance((h, w), sites)
+    size = np.sqrt(h * w / len(sites))
+    half_line = 0.5 * line_width * size
+    colors = img_array[sites[:, 0], sites[:, 1]].astype(np.float32) / 255
+    base = colors[label]
+
+    # each region: a mound rising from the line and flat on the top
+    t = np.clip((dist - half_line) / (0.3 * size), 0, 1)
+    z = _blur(height * size * np.sin(t * np.pi / 2), 0.09 * size)
+    if half_line > 0 and groove > 0:
+        # U-shaped groove under the line, blurred slightly to keep its walls
+        u = np.clip(dist / half_line, 0, 1)
+        z = z + ndimage.gaussian_filter(
+            np.where(dist < half_line, -groove * size * np.cos(u * np.pi / 2), 0.0), 0.8
+        )
+    shading, specular = _shade(z)
+    # the foot of each mound gets less ambient light
+    occlusion = 1 - min(3.5 * height, 0.3) * np.exp(
+        -np.maximum(dist - half_line, 0) / (0.07 * size)
+    )
+    out = base * (shading * occlusion)[..., None] + gloss * specular[..., None]
+    if half_line > 0:
+        # matte line shaded by the groove
+        line_rgb = np.broadcast_to(np.asarray(line_color, np.float32) / 255, (3,))
+        line = line_rgb * shading[..., None] + gloss / 3 * specular[..., None]
+        alpha = (1 - _smoothstep(0.7 * half_line, 1.1 * half_line, dist))[..., None]
+        out = out * (1 - alpha) + line * alpha
+    return Image.fromarray((np.clip(out, 0, 1) * 255).round().astype(np.uint8))
+
+
+def voronoi_relief(
+    img,
+    num_regions=20,
+    mode="L",
+    random=False,
+    line_width=0.11,
+    line_color=(115, 115, 115),
+    height=0.04,
+    groove=0.04,
+    gloss=0.12,
+):
+    """create Voronoi mosaic art that looks like glossy, slightly raised paint
+    separated by recessed lines, lit from the upper left.
+
+    img: str (file path) or PIL.Image instance
+    num_regions: int (default=20)
+        number of regions.
+    mode: 'L' or 'color'
+        features used by k-means to place the Voronoi sites (see voronoi_mosaic).
+    random: boolean
+        if true, use randomly selected sites instead of k-means (default False)
+    line_width: float (default=0.11)
+        width of the boundary lines relative to the typical region size
+        sqrt(number of pixels / num_regions). 0 removes the lines.
+    line_color: int or (R, G, B) (default=(115, 115, 115))
+        color of the boundary lines. an int gives a gray level.
+    height: float (default=0.04)
+        height of the raised regions relative to the typical region size.
+        0 makes them flat.
+    groove: float (default=0.04)
+        depth of the groove under the lines relative to the typical region size.
+    gloss: float (default=0.12)
+        strength of the specular highlights.
+    """
+    km = KMeansImage(img)
+    sites = km.find_sites(num_regions, mode=mode, random=random)
+    return relief_image(
+        km.img_array,
+        sites,
+        line_width=line_width,
+        line_color=line_color,
+        height=height,
+        groove=groove,
+        gloss=gloss,
+    )
 
 
 def voronoi_mosaic(
