@@ -1,6 +1,7 @@
 from importlib.metadata import PackageNotFoundError, version
 
 from .imgrit import voronoi_mosaic
+from .imgrit import voronoi_relief
 from .imgrit import warhol_effect
 
 try:
